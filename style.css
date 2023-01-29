@@ -1,0 +1,17 @@
+#run-button {
+  padding: 10px;
+  margin: 25px;
+}
+
+#output-texts {
+  display: block;
+  margin: 10px;
+}
+#text-output {
+  width: 500px;
+  height: 500px;
+}
+#info-output {
+  width: 500px;
+  height: 500px;
+}

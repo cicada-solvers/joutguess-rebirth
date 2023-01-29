@@ -1,0 +1,36 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <link href="style.css" rel="stylesheet" />  
+  <title>JOutguess</title>
+  <script src="main.js"></script>
+  <script src="outguess.js"></script>
+</head>
+
+<body>
+  <h2>JOutguess</h2>
+
+  <div>
+    <label for="file-selector">Select a file: </label><input type="file" id="file-selector" /> (or drag-and-drop it)
+  </div>
+
+  <button disabled id="run-button">Run Outguess!</button>
+
+  <div>
+    Output :
+    <button disabled id="download-button">Download file</button>
+
+    <div id="output-texts">
+      <textarea disabled readonly id="text-output"></textarea>
+      <textarea disabled readonly id="info-output"></textarea>
+    <div>
+  </div>
+
+<!--  <h4>Advanced options :</h4>
+  <div>
+    <label for="key1">Key 1: </label><input type="text" id="key1" />
+  </div> -->
+</body>
+</html>
+
