@@ -87,7 +87,7 @@ index b099643..73ed2df 100644
  void bitmap_from_jpg(bitmap *bitmap, image *image, int flags);
  void bitmap_to_jpg(image *image, bitmap *bitmap, int flags);
 diff --git a/src/outguess.c b/src/outguess.c
-index 44f12cd..670e384 100644
+index 44f12cd..65e421f 100644
 --- a/src/outguess.c
 +++ b/src/outguess.c
 @@ -45,6 +45,8 @@
@@ -105,7 +105,14 @@ index 44f12cd..670e384 100644
  
 -int
 -main(int argc, char **argv)
--{
++struct return_information {
++  uint8_t* message;
++  size_t message_length;
++};
++
++struct return_information* EMSCRIPTEN_KEEPALIVE
++outguess_main(char* image_filename, uint8_t* image_data, size_t image_data_size, char* key, int use_error_correction)
+ {
 -	char version[] = "OutGuess 0.4 Universal Stego 1999-2021 Niels Provos and others";
 -	char usage[] = "%s\n\n%s [options] [<input file> [<output file>]]\n"
 -		"\t-h           print this usage help text and exit\n"
@@ -125,30 +132,33 @@ index 44f12cd..670e384 100644
 -		"\t-f           fourier transform modified image\n"
 -#endif /* FOURIER */
 -		;
-+struct return_information {
-+  uint8_t* message;
-+  size_t message_length;
-+};
- 
+-
 -	char *progname;
 -	FILE *fin = stdin, *fout = stdout;
-+struct return_information* EMSCRIPTEN_KEEPALIVE
-+outguess_main(char* image_filename, uint8_t* image_data, size_t image_data_size)
-+{
  	image *image;
  	handler *srch = NULL, *dsth = NULL;
  	char *param = NULL;
-@@ -820,139 +805,29 @@ main(int argc, char **argv)
+@@ -814,322 +799,71 @@ main(int argc, char **argv)
+ 	int j, ch, derive = 0;
+ 	stegres cumres, tmpres;
+ 	config cfg1, cfg2;
+-	u_char *data = NULL, *data2 = NULL;
++	u_char *data = NULL;
+ 	int datalen;
+-	char *key = "Default key", *key2 = NULL;
  	struct arc4_stream as, tas;
- 	char mark = 0, doretrieve = 0;
- 	char doerror = 0, doerror2 = 0;
+-	char mark = 0, doretrieve = 0;
+-	char doerror = 0, doerror2 = 0;
 -	char *cp;
- 	int extractonly = 0, foil = 1;
- #ifdef FOURIER
- 	char dofourier = 0;
- #endif /* FOURIER */
- 
+-	int extractonly = 0, foil = 1;
+-#ifdef FOURIER
+-	char dofourier = 0;
+-#endif /* FOURIER */
+-
 -	progname = argv[0];
++	char doretrieve = 0;
++	char doerror = 0;
++
 +  struct return_information* rv = malloc(sizeof(struct return_information));
 +  if (rv == NULL)
 +    return NULL;
@@ -171,7 +181,10 @@ index 44f12cd..670e384 100644
 -		argc--;
 -		goto aftergetop;
 -	}
--
++  /* outguess options */
++  doretrieve = 1;
++  doerror = use_error_correction;
+ 
 -	/* read command line arguments */
 -	while ((ch = getopt(argc, argv, "heErmftp:s:S:i:I:k:d:D:K:x:F:")) != -1)
 -		switch((char)ch) {
@@ -279,9 +292,7 @@ index 44f12cd..670e384 100644
 -	} else {
 -		fin = stdin;
 -		fout = stdout;
-+  /* outguess options */
-+  doretrieve = 1;
- 
+-
 -		srch = dsth = get_handler(".ppm");
 +	srch = get_handler(image_filename);
 +	if (srch == NULL) {
@@ -290,7 +301,9 @@ index 44f12cd..670e384 100644
  	}
  
  	/* Initialize Golay-Tables for 12->23 bit error correction */
-@@ -961,175 +836,38 @@ main(int argc, char **argv)
+-	if (doerror || doerror2) {
++	if (doerror) {
+ 		fprintf(stderr, "Initialize encoding/decoding tables\n");
  		init_golay();
  	}
  

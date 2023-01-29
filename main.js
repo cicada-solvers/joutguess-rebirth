@@ -15,10 +15,13 @@ async function outguess(input_file, parameters) {
   for (let i = 0; i < image_data_size; i++)
     setValue(image_data_ptr + i, image_data[i], "i8");
 
+  let key_ptr = allocateUTF8(parameters.key);
+  let use_error_correction = parameters.error_correction ? 1 : 0;
+
   let return_info = null;
   try {
     // outguess_main(char* image_filename, uint8_t* image_data, size_t image_data_size)
-    return_info = Module._outguess_main(image_filename, image_data_ptr, image_data_size);
+    return_info = Module._outguess_main(image_filename, image_data_ptr, image_data_size, key_ptr, use_error_correction);
   }
   catch (e) {
     if (e.name == "ExitStatus") {
@@ -33,6 +36,7 @@ async function outguess(input_file, parameters) {
 
       _free(image_filename);
       _free(image_data_ptr);
+      _free(key_ptr);
 
       return {
         success: false,
@@ -60,6 +64,7 @@ async function outguess(input_file, parameters) {
 
   _free(image_filename);
   _free(image_data_ptr);
+  _free(key_ptr);
 
   if (message_outguessed)
     _free(message_ptr);
@@ -116,6 +121,8 @@ class JOutguess {
     this.download_button = document.getElementById("download-button"); 
     this.output_textarea = document.getElementById("text-output");
     this.info_textarea = document.getElementById("info-output");
+    this.key_input = document.getElementById("key");
+    this.error_correction_checkbox = document.getElementById("error-correction");
 
     // Events
     this.file_selector.addEventListener("input", () => 
@@ -142,6 +149,13 @@ class JOutguess {
 
     this.run_button.addEventListener("click", async () =>
       this.run_outguess()
+    );
+
+    this.key_input.addEventListener("change", () =>
+      this.parameters.key = this.key_input.value === "" ? "Default key" : this.key_input.value
+    );
+    this.error_correction_checkbox.addEventListener("change", () =>
+      this.parameters.error_correction = this.error_correction_checkbox.checked
     );
 
     // Initialization
