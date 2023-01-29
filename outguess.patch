@@ -1,0 +1,726 @@
+diff --git a/src/jpg.c b/src/jpg.c
+index 173deaa..24dc100 100644
+--- a/src/jpg.c
++++ b/src/jpg.c
+@@ -49,6 +49,7 @@
+ #include "jpg.h"
+ 
+ #include "jpeg-6b-steg/jmorecfg.h"
++#include "jpeg-6b-steg/jerror.h"
+ 
+ void jpeg_dummy_dest (j_compress_ptr cinfo);
+ 
+@@ -611,6 +612,44 @@ write_JPEG_file (FILE *outfile, image *image)
+  * will go away automatically when the JPEG object is cleaned up.
+  */
+ 
++// From Carl Staelin, https://stackoverflow.com/questions/5280756/libjpeg-ver-6b-jpeg-stdio-src-vs-jpeg-mem-src
++
++/* Read JPEG image from a memory segment */
++static void init_source (j_decompress_ptr cinfo) {}
++static boolean fill_input_buffer (j_decompress_ptr cinfo)
++{
++    ERREXIT(cinfo, JERR_INPUT_EMPTY);
++return TRUE;
++}
++static void skip_input_data (j_decompress_ptr cinfo, long num_bytes)
++{
++    struct jpeg_source_mgr* src = (struct jpeg_source_mgr*) cinfo->src;
++
++    if (num_bytes > 0) {
++        src->next_input_byte += (size_t) num_bytes;
++        src->bytes_in_buffer -= (size_t) num_bytes;
++    }
++}
++static void term_source (j_decompress_ptr cinfo) {}
++static void jpeg_mem_src (j_decompress_ptr cinfo, void* buffer, long nbytes)
++{
++    struct jpeg_source_mgr* src;
++
++    if (cinfo->src == NULL) {   /* first time for this JPEG object? */
++        cinfo->src = (struct jpeg_source_mgr *)
++            (*cinfo->mem->alloc_small) ((j_common_ptr) cinfo, JPOOL_PERMANENT,
++            sizeof(struct jpeg_source_mgr));
++    }
++
++    src = (struct jpeg_source_mgr*) cinfo->src;
++    src->init_source = init_source;
++    src->fill_input_buffer = fill_input_buffer;
++    src->skip_input_data = skip_input_data;
++    src->resync_to_restart = jpeg_resync_to_restart; /* use default method */
++    src->term_source = term_source;
++    src->bytes_in_buffer = nbytes;
++    src->next_input_byte = (JOCTET*)buffer;
++}
+ 
+ /*
+  * Sample routine for JPEG decompression.  We assume that the source file name
+@@ -619,7 +658,7 @@ write_JPEG_file (FILE *outfile, image *image)
+ 
+ 
+ image *
+-read_JPEG_file (FILE *infile)
++read_JPEG_file (uint8_t* file_content, size_t file_size)
+ {
+   /* This struct contains the JPEG decompression parameters and pointers to
+    * working space (which is allocated as needed by the JPEG library).
+@@ -649,7 +688,7 @@ read_JPEG_file (FILE *infile)
+ 
+   /* Step 2: specify data source (eg, a file) */
+ 
+-  jpeg_stdio_src(&cinfo, infile);
++  jpeg_mem_src(&cinfo, file_content, file_size);
+ 
+   /* Step 3: read file parameters with jpeg_read_header() */
+ 
+diff --git a/src/jpg.h b/src/jpg.h
+index b099643..73ed2df 100644
+--- a/src/jpg.h
++++ b/src/jpg.h
+@@ -40,7 +40,7 @@ void init_JPEG_handler(char *parameters);
+ int preserve_jpg(bitmap *, int);
+ 
+ void write_JPEG_file (FILE *outfile, image *image);
+-image *read_JPEG_file (FILE *infile);
++image *read_JPEG_file (uint8_t*, size_t);
+ 
+ void bitmap_from_jpg(bitmap *bitmap, image *image, int flags);
+ void bitmap_to_jpg(image *image, bitmap *bitmap, int flags);
+diff --git a/src/outguess.c b/src/outguess.c
+index 44f12cd..670e384 100644
+--- a/src/outguess.c
++++ b/src/outguess.c
+@@ -45,6 +45,8 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
++#include <emscripten/emscripten.h>
++
+ #include <sys/types.h>
+ #include <sys/stat.h>
+ #include <sys/mman.h>
+@@ -780,31 +782,14 @@ munmap_file(u_char *data, int len)
+ #endif /* HAVE_MMAP */
+ }
+ 
+-int
+-main(int argc, char **argv)
+-{
+-	char version[] = "OutGuess 0.4 Universal Stego 1999-2021 Niels Provos and others";
+-	char usage[] = "%s\n\n%s [options] [<input file> [<output file>]]\n"
+-		"\t-h           print this usage help text and exit\n"
+-		"\t-[sS] <n>    iteration start, capital letter for 2nd dataset\n"
+-		"\t-[iI] <n>    iteration limit\n"
+-		"\t-[kK] <key>  key\n"
+-		"\t-[dD] <name> filename of dataset\n"
+-		"\t-[eE]        use error correcting encoding\n"
+-		"\t-p <param>   parameter passed to destination data handler\n"
+-		"\t-r           retrieve message from data\n"
+-		"\t-x <n>       number of key derivations to be tried\n"
+-		"\t-m           mark pixels that have been modified\n"
+-		"\t-t           collect statistic information\n"
+-		"\t-F[+-]       turns statistical steganalysis foiling on/off.\n"
+-		"\t             The default is on.\n"
+-#ifdef FOURIER
+-		"\t-f           fourier transform modified image\n"
+-#endif /* FOURIER */
+-		;
++struct return_information {
++  uint8_t* message;
++  size_t message_length;
++};
+ 
+-	char *progname;
+-	FILE *fin = stdin, *fout = stdout;
++struct return_information* EMSCRIPTEN_KEEPALIVE
++outguess_main(char* image_filename, uint8_t* image_data, size_t image_data_size)
++{
+ 	image *image;
+ 	handler *srch = NULL, *dsth = NULL;
+ 	char *param = NULL;
+@@ -820,139 +805,29 @@ main(int argc, char **argv)
+ 	struct arc4_stream as, tas;
+ 	char mark = 0, doretrieve = 0;
+ 	char doerror = 0, doerror2 = 0;
+-	char *cp;
+ 	int extractonly = 0, foil = 1;
+ #ifdef FOURIER
+ 	char dofourier = 0;
+ #endif /* FOURIER */
+ 
+-	progname = argv[0];
++  struct return_information* rv = malloc(sizeof(struct return_information));
++  if (rv == NULL)
++    return NULL;
++  rv->message = NULL;
++  rv->message_length = 0;
++
+ 	steg_stat = 0;
+ 
+ 	memset(&cfg1, 0, sizeof(cfg1));
+ 	memset(&cfg2, 0, sizeof(cfg2));
+ 
+-        if (strchr(argv[0], '/'))
+-                cp = strrchr(argv[0], '/') + 1;
+-        else
+-                cp = argv[0];
+-	if (!strcmp("outguess-extract", cp)) {
+-		extractonly = 1;
+-		doretrieve = 1;
+-		argv++;
+-		argc--;
+-		goto aftergetop;
+-	}
+-
+-	/* read command line arguments */
+-	while ((ch = getopt(argc, argv, "heErmftp:s:S:i:I:k:d:D:K:x:F:")) != -1)
+-		switch((char)ch) {
+-		case 'h':
+-			fprintf(stderr, usage, version, argv[0]);
+-			exit(0);
+-		case 'F':
+-			if (optarg[0] == '-')
+-				foil = 0;
+-			break;
+-		case 'k':
+-			key = optarg;
+-			break;
+-		case 'K':
+-			key2 = optarg;
+-			break;
+-		case 'p':
+-			param = optarg;
+-			break;
+-		case 'x':
+-			derive = atoi(optarg);
+-			break;
+-		case 'i':
+-			cfg1.siter = atoi(optarg);
+-			break;
+-		case 'I':
+-			cfg2.siter = atoi(optarg);
+-			break;
+-		case 'r':
+-			doretrieve = 1;
+-			break;
+-		case 't':
+-			steg_stat++;
+-			break;
+-		case 's':
+-			cfg1.siterstart = atoi(optarg);
+-			break;
+-		case 'S':
+-			cfg2.siterstart = atoi(optarg);
+-			break;
+-#ifdef FOURIER
+-		case 'f':
+-			dofourier = 1;
+-			break;
+-#endif /* FOURIER */
+-		case 'm':
+-			mark = 1; /* Mark bytes we modified with 255 */
+-			break;
+-		case 'd':
+-			data = optarg;
+-			break;
+-		case 'D':
+-			data2 = optarg;
+-			break;
+-		case 'e':
+-			doerror = 1;
+-			break;
+-		case 'E':
+-			doerror2 = 1;
+-			break;
+-		default:
+-			fprintf(stderr, usage, version, argv[0]);
+-			exit(1);
+-		}
+-
+-	argc -= optind;
+-	argv += optind;
+-
+- aftergetop:
+-	if ((argc != 2 && argc != 0) ||
+-	    (extractonly && argc != 2) ||
+-	    (!doretrieve && !extractonly && data == NULL)) {
+-		fprintf(stderr, usage, version, progname);
+-		exit(1);
+-	}
+-
+-	if (argc == 2) {
+-		srch = get_handler(argv[0]);
+-		if (srch == NULL) {
+-			fprintf(stderr, "Unknown data type of %s\n", argv[0]);
+-			exit (1);
+-		}
+-		if (!doretrieve) {
+-			dsth = get_handler(argv[1]);
+-			if (dsth == NULL) {
+-				fprintf(stderr, "Unknown data type of %s\n",
+-					argv[1]);
+-				exit (1);
+-			}
+-		}
+-		fin = fopen(argv[0], "rb");
+-		if (fin == NULL) {
+-			fprintf(stderr, "Can't open input file '%s': ",
+-				argv[0]);
+-			perror("fopen");
+-			exit(1);
+-		}
+-		fout = fopen(argv[1], "wb");
+-		if (fout == NULL) {
+-			fprintf(stderr, "Can't open output file '%s': ",
+-				argv[1]);
+-			perror("fopen");
+-			exit(1);
+-		}
+-	} else {
+-		fin = stdin;
+-		fout = stdout;
++  /* outguess options */
++  doretrieve = 1;
+ 
+-		srch = dsth = get_handler(".ppm");
++	srch = get_handler(image_filename);
++	if (srch == NULL) {
++		fprintf(stderr, "Unknown data type of %s\n", image_filename);
++    return rv;
+ 	}
+ 
+ 	/* Initialize Golay-Tables for 12->23 bit error correction */
+@@ -961,175 +836,38 @@ main(int argc, char **argv)
+ 		init_golay();
+ 	}
+ 
+-	fprintf(stderr, "Reading %s....\n", argv[0]);
+-	image = srch->read(fin);
++	fprintf(stderr, "Reading %s....\n", image_filename);
++	image = srch->read(image_data, image_data_size);
+ 
+-	if (extractonly) {
+-		int bits;
+-		/* Wen extracting get the bitmap from the source handler */
+-		srch->get_bitmap(&bitmap, image, STEG_RETRIEVE);
++	srch->get_bitmap(&bitmap, image, STEG_RETRIEVE);
+ 
+-		fprintf(stderr, "Writing %d bits\n", bitmap.bits);
+-		bits = htonl(bitmap.bits);
+-		fwrite(&bits, 1, sizeof(int), fout);
+-		fwrite(bitmap.bitmap, bitmap.bytes, sizeof(char), fout);
+-		exit (1);
+-	} else if (doretrieve)
+-		/* Wen extracting get the bitmap from the source handler */
+-		srch->get_bitmap(&bitmap, image, STEG_RETRIEVE);
+-	else {
+-		/* Initialize destination data handler */
+-		dsth->init(param);
+-		/* When embedding the destination format determines the bits */
+-		dsth->get_bitmap(&bitmap, image, 0);
+-	}
+ 	fprintf(stderr, "Extracting usable bits:   %d bits\n", bitmap.bits);
+ 
+ 	if (doerror)
+ 		cfg1.flags |= STEG_ERROR;
+ 
+-	if (!doretrieve) {
+-		if (mark)
+-			cfg1.flags |= STEG_MARK;
+-		if (foil) {
+-			dsth->preserve(&bitmap, -1);
+-			if (bitmap.maxcorrect)
+-				fprintf(stderr,
+-					"Correctable message size: %zu bits, %0.2f%%\n",
+-					bitmap.maxcorrect,
+-					(float)100*bitmap.maxcorrect/bitmap.bits);
+-		}
+-
+-		do_embed(&bitmap, data, key, strlen(key), &cfg1, &cumres);
+-
+-		if (key2 && data2) {
+-			char derivekey[128];
+-			int i;
+-
+-			/* Flags from first configuration are being copied */
+-			cfg2.flags = cfg1.flags;
+-			if (doerror2)
+-				cfg2.flags |= STEG_ERROR;
+-			else
+-				cfg2.flags &= ~STEG_ERROR;
+-
+-			for (j = -1, i = 0; i <= derive && j < 0; i++) {
+-#ifdef HAVE_SNPRINTF
+-				snprintf(derivekey, 128, "%s%d", key2, i);
+-#else /* YOU SUCK */
+-				sprintf(derivekey, "%s%d", key2, i);
+-#endif /* HAVE_SNPRINTF */
+-				if (i == 0)
+-					derivekey[strlen(key2)] = '\0';
+-
+-				j = do_embed(&bitmap, data2,
+-					     derivekey, strlen(derivekey),
+-					     &cfg2, &tmpres);
+-			}
+-
+-			if (j < 0) {
+-				fprintf(stderr, "Failed to find embedding.\n");
+-				exit (1);
+-			}
+-
+-			cumres.changed += tmpres.changed;
+-			cumres.bias += tmpres.bias;
+-		}
+-
+-		if (foil) {
+-			int i, count;
+-			double mean, dev;
+-			int n;
+-			u_char cbit;
+-			u_char *pbits = bitmap.bitmap;
+-			u_char *bdata = bitmap.data;
+-			u_char *plocked = bitmap.locked;
+-
+-			memset(steg_offset, 0, sizeof(steg_offset));
+-			steg_foil = steg_foilfail = 0;
+-
+-			for (i = 0; i < bitmap.bits; i++) {
+-				if (!TEST_BIT(plocked, i))
+-					continue;
+-
+-				cbit = TEST_BIT(pbits, i) ? 1 : 0;
+-
+-				if (cbit == (bdata[i] & 0x01))
+-					continue;
+-
+-				n = bitmap.preserve(&bitmap, i);
+-				if (n > 0) {
+-					/* Actual modificaton */
+-					n = abs(n - i);
+-					if (n > MAX_SEEK)
+-						n = MAX_SEEK;
+-
+-					steg_offset[n - 1]++;
+-				}
+-			}
+-
+-			/* Indicates that we are done with the image */
+-			bitmap.preserve(&bitmap, bitmap.bits);
+-
+-			/* Calculate statistics */
+-			count = 0;
+-			mean = 0;
+-			for (i = 0; i < MAX_SEEK; i++) {
+-				count += steg_offset[i];
+-				mean += steg_offset[i] * (i + 1);
+-			}
+-			mean /= count;
+-
+-			dev = 0;
+-			for (i = 0; i < MAX_SEEK; i++) {
+-				const double sq = (i + 1 - mean) * (i + 1 - mean);
+-				dev += steg_offset[i] * sq;
+-			}
+-
+-			fprintf(stderr, "Foiling statistics: "
+-				"corrections: %d, failed: %d, "
+-				"offset: %f +- %f\n",
+-				steg_foil, steg_foilfail,
+-				mean, sqrt(dev / (count - 1)));
+-		}
+-
+-		fprintf(stderr, "Total bits changed: %d (change %d + bias %d)\n",
+-			cumres.changed + cumres.bias,
+-			cumres.changed, cumres.bias);
+-		fprintf(stderr, "Storing bitmap into data...\n");
+-		dsth->put_bitmap (image, &bitmap, cfg1.flags);
+-
+-#ifdef FOURIER
+-		if (dofourier)
+-			fft_image(image->x, image->y, image->depth,
+-				  image->img);
+-#endif /* FOURIER */
+-
+-		fprintf(stderr, "Writing %s....\n", argv[1]);
+-		dsth->write(fout, image);
+-	} else {
+-		/* Initialize random data stream */
+-		arc4_initkey(&as,  "Encryption", key, strlen(key));
+-		tas = as;
++	/* Initialize random data stream */
++	arc4_initkey(&as,  "Encryption", key, strlen(key));
++	tas = as;
+ 
+-		iterator_init(&iter, &bitmap, key, strlen(key));
++	iterator_init(&iter, &bitmap, key, strlen(key));
+ 
+-		encdata = steg_retrieve(&datalen, &bitmap, &iter, &as,
+-					cfg1.flags);
++	encdata = steg_retrieve(&datalen, &bitmap, &iter, &as,
++				cfg1.flags);
+ 
+-		data = decode_data(encdata, &datalen, &tas, cfg1.flags);
+-		free(encdata);
++	data = decode_data(encdata, &datalen, &tas, cfg1.flags);
++	free(encdata);
+ 
+-		fwrite(data, datalen, sizeof(u_char), fout);
+-		free(data);
+-	}
++  // The JS code must free `rv` and `data`
++  rv->message = data;
++  rv->message_length = datalen; 
+ 
+ 	free(bitmap.bitmap);
+ 	free(bitmap.locked);
+ 
+ 	free_pnm(image);
+ 
+-	return 0;
++	return rv;
+ }
+ 
+ 
+diff --git a/src/pnm.c b/src/pnm.c
+index c015f16..07ad1c8 100644
+--- a/src/pnm.c
++++ b/src/pnm.c
+@@ -77,19 +77,33 @@ preserve_pnm(bitmap *bitmap, int off)
+ 
+ /* skip whitespace and comments in PGM/PPM headers */
+ void
+-skip_white(FILE *f)
++skip_white(char** data, size_t* size)
+ {
+ 	int c;
+ 
+-	do {
+-		while (isspace(c = getc(f)));
+-		if (c == '#')
+-			while ((c = getc(f)) != '\n' && c != EOF);
++  while (*size > 0) {
++    do {
++      c = **data;
++      data++;
++      size--;
++    } while (isspace(c) && *size > 0);
++
++    if (*size == 0)
++      return;
++
++		if (c == '#') {
++      do {
++        c = **data;
++        data++;
++        size--;
++			} while (c != '\n' && *size > 0);
++    }
+ 		else {
+-			ungetc(c, f);
++      data--;
++      size++;
+ 			return;
+ 		}
+-	} while (c != EOF);
++	}
+ }
+ 
+ void
+@@ -161,45 +175,81 @@ bitmap_from_pnm(bitmap *bitmap, image *image, int flags)
+ 
+ 
+ image *
+-read_pnm(FILE *fin)
++read_pnm(uint8_t* file_bytes, size_t file_size)
+ {
+ 	image *image;
+-	char magic[10];
+ 	int v;
+ 
++  char* file_content = (char*)file_bytes;
++
+ 	image = checkedmalloc(sizeof(*image));
+ 	memset(image, 0, sizeof(*image));
+ 
+-	const char* const getsRet = fgets(magic, 10, fin);
+-	if (getsRet == NULL) {
++  char* magic = (char*)file_content;
++
++	if (file_size < 10) {
+ 		fprintf(stderr, "Failed to read the magic value of the image!\n");
+-		fprintf(stderr, "This suggest either an I/O error, ");
+-		fprintf(stderr, "or that the file is invalid.\n");
++		fprintf(stderr, "This suggest	that the file is invalid.\n");
+ 		exit(1);
+ 	}
+ 	if (magic[0] != 'P' || !isdigit(magic[1]) || magic[2] != '\n') {
+ 		fprintf(stderr, "Unsupported input file type!\n");
+ 		exit(1);
+ 	}
+-	skip_white(fin);
+-	int nScanned = fscanf(fin, "%d", &image->x);
+-	if (nScanned != 1) {
+-		fprintf(stderr, "Failed to read image width!\n");
+-		exit(1);
+-	}
+-	skip_white(fin);
+-	nScanned = fscanf(fin, "%d", &image->y);
+-	if (nScanned != 1) {
+-		fprintf(stderr, "Failed to read image height!\n");
+-		exit(1);
+-	}
+-	skip_white(fin);
+-	nScanned = fscanf(fin, "%d", &image->max);
+-	if (nScanned != 1) {
+-		fprintf(stderr, "Failed to read image max pixel value!\n");
+-		exit(1);
+-	}
+-	getc(fin);
++  file_content += 10;
++  file_size -= 10;
++	skip_white(&file_content, &file_size);
++ 
++  char* file_content_pre = file_content;
++  if (file_size == 0) {
++    fprintf(stderr, "Failed to read image width!\n");
++    exit(1);
++  }
++  int scanned = strtol(file_content, &file_content, 10);
++  if (file_content_pre == file_content) {
++    fprintf(stderr, "Failed to read image width!\n");
++    exit(1);
++  }
++  image->x = scanned;
++  file_size -= (uintptr_t)(file_content - file_content_pre);
++
++	skip_white(&file_content, &file_size);
++
++  file_content_pre = file_content;
++  if (file_size == 0) {
++    fprintf(stderr, "Failed to read image height!\n");
++    exit(1);
++  }
++  scanned = strtol(file_content, &file_content, 10);
++  if (file_content_pre == file_content) {
++    fprintf(stderr, "Failed to read image height!\n");
++    exit(1);
++  }
++  image->y = scanned;
++  file_size -= (uintptr_t)(file_content - file_content_pre);
++
++	skip_white(&file_content, &file_size);
++
++  file_content_pre = file_content;
++  if (file_size == 0) {
++    fprintf(stderr, "Failed to read image max pixel value!\n");
++    exit(1);
++  }
++  scanned = strtol(file_content, &file_content, 10);
++  if (file_content_pre == file_content) {
++    fprintf(stderr, "Failed to read image max pixel value!\n");
++    exit(1);
++  }
++  image->max = scanned;
++  file_size -= (uintptr_t)(file_content - file_content_pre);
++
++  if (file_size == 1) {
++    fprintf(stderr, "Unexpected EOF!\n");
++    exit(1);
++  }
++  file_size--;
++  file_content++;
++
+ 	if (image->max > 255 || image->max <= 0 || image->x <= 1 ||
+ 	    image->y <= 1) {
+ 		fprintf(stderr, "Unsupported value range!\n");
+@@ -228,39 +278,40 @@ read_pnm(FILE *fin)
+ 	case '2': /* PGM ASCII */
+ 	case '3': /* PPM ASCII */
+ 		for (size_t i = 0; i < image->x * image->y * image->depth; i++) {
+-			skip_white(fin);
+-			nScanned = fscanf(fin, "%d", &v);
+-			if (nScanned != 1) {
+-				fprintf(stderr, "Failed to read image pixel value!\n");
+-				exit(1);
+-			}
++			skip_white(&file_content, &file_size);
++
++      file_content_pre = file_content;
++      if (file_size == 0) {
++        fprintf(stderr, "Failed to read image pixel value!\n");
++        exit(1);
++      }
++      scanned = strtol(file_content, &file_content, 10);
++      if (file_content_pre == file_content) {
++        fprintf(stderr, "Failed to read image pixel value!\n");
++        exit(1);
++      }
++      v = scanned;
++      file_size -= (uintptr_t)(file_content - file_content_pre);
++
+ 			if (v < 0 || v > image->max) {
+ 				fprintf(stderr, "Out of range value %d!\n", v);
+ 				exit(1);
+ 			}
++
+ 			(image->img)[i] = v;
+ 		}
+ 		break;
+ 	case '5': /* PGM binary */
+ 	case '6': /* PPM binary */
+-		if (fread(image->img, image->x * image->depth, image->y, fin)
+-				!= image->y)
++		if (file_size < image->x * image->depth * image->y)
+ 		{
+ 			fprintf(stderr, "Failed to read PPM image data!\n");
+-			fprintf(stderr, "This suggest either an I/O error, ");
+-			fprintf(stderr, "or that the file is invalid.\n");
++			fprintf(stderr, "This suggest that the file is invalid.\n");
+ 			exit(1);
+ 		}
+-		break;
+-	}
++    memcpy(image->img, file_content, image->x * image->depth * image->y);
+ 
+-	if (ferror(fin)) {
+-		perror("Error occurred while reading input file");
+-		exit(1);
+-	}
+-	if (feof(fin)) {
+-		fprintf(stderr, "Unexpected end of input file!\n");
+-		exit(1);
++		break;
+ 	}
+ 
+ 	return image;
+diff --git a/src/pnm.h b/src/pnm.h
+index e2cb7c8..2581d1e 100644
+--- a/src/pnm.h
++++ b/src/pnm.h
+@@ -55,7 +55,7 @@ typedef struct _handler {
+ 	char *extension;				/* Extension name */
+ 	char *extension_alternative;		/* Extension name */
+ 	void (*init)(char *);
+-	image *(*read)(FILE *);
++	image *(*read)(uint8_t*, size_t);
+ 	void (*write)(FILE *, image *);
+ 	void (*get_bitmap)(bitmap *, image *, int);
+ 	void (*put_bitmap)(image *, bitmap *, int);
+@@ -64,7 +64,7 @@ typedef struct _handler {
+ 
+ extern handler pnm_handler;
+ 
+-void skip_white(FILE *f);
++void skip_white(char**, size_t*);
+ 
+ void init_pnm(char *);
+ 
+@@ -73,7 +73,7 @@ int preserve_pnm(bitmap *, int);
+ void bitmap_to_pnm(image *img, bitmap *bitmap, int flags);
+ void bitmap_from_pnm(bitmap *bitmap, image *image, int flags);
+ 
+-image *read_pnm(FILE *fin);
++image *read_pnm(uint8_t*, size_t);
+ void write_pnm(FILE *fout, image *image);
+ 
+ void free_pnm(image *image);
