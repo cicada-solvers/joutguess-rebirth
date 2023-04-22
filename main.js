@@ -44,6 +44,13 @@ async function outguess(input_file, parameters) {
         info: info
       };
     }
+    else if (e.name == "RuntimeError") {
+      return {
+        success: false,
+        output: null,
+        info: `Outguess crashed: ${e.message}.\nThis crash would probably have also occured when using the original command-line version.`
+      };
+    }
     else {
       // Unknown error, log it
       console.warn(e);

@@ -12,7 +12,7 @@ This project is a loosely-inspired replacement tool.
 4. Run `./autogen.sh` to generate `./configure`
 5. Configure: `emconfigure ./configure --with-generic-jconfig`
 6. Compile all object files: `emmake make`
-7. Generate `outguess.wasm` and `outguess.js` from the object files in the project root: `emcc src/arc.o src/golay.o src/iterator.o src/jpg.o src/md5.o src/outguess.o src/pnm.o **/**/*.o -sEXPORTED_FUNCTIONS=_malloc,_free -o ../outguess.js`
+7. Generate `outguess.wasm` and `outguess.js` from the object files in the project root: `emcc src/arc.o src/golay.o src/iterator.o src/jpg.o src/md5.o src/outguess.o src/pnm.o **/**/*.o -sEXPORTED_FUNCTIONS=_malloc,_free -o ../outguess.js -s ALLOW_MEMORY_GROWTH=1`
 
 ### Licence
 Copyright 2023 tweqx
